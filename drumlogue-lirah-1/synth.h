@@ -169,7 +169,7 @@ class Synth {
   inline void setParameter(uint8_t index, int32_t value) {
     switch (index) {
       case k_param_fm_depth:
-        params_.fmDepth = value * 2.f;
+        params_.fmDepth = value * k_fm_depth_scale;
         break;
       case k_param_hyper_lfo_depth:
         params_.lfoDepth = value * (1.f / 1023.f);
@@ -221,8 +221,10 @@ class Synth {
     if (index != k_param_lfo3_target)
       return nullptr;
 
-    value = static_cast<int32_t>(clampf(static_cast<float>(value), k_lfo3_target_off,
-                                        k_lfo3_target_feedback));
+    if (value < k_lfo3_target_off)
+      value = k_lfo3_target_off;
+    if (value > k_lfo3_target_feedback)
+      value = k_lfo3_target_feedback;
     return targetNames[value];
   }
 
@@ -231,7 +233,7 @@ class Synth {
   inline void NoteOn(uint8_t note, uint8_t velocity) {
     activeNote_ = note;
     baseW0_ = midiNoteToW0(static_cast<float>(note));
-    velocityAmp_ = 0.15f + 0.85f * (velocity * (1.f / 127.f));
+    velocityAmp_ = velocityToAmp(velocity);
     gateOn_ = true;
   }
 
@@ -241,7 +243,7 @@ class Synth {
   }
 
   inline void GateOn(uint8_t velocity) {
-    velocityAmp_ = 0.15f + 0.85f * (velocity * (1.f / 127.f));
+    velocityAmp_ = velocityToAmp(velocity);
     gateOn_ = true;
   }
 
@@ -274,6 +276,7 @@ class Synth {
   static constexpr float k_sample_rate_hz = 48000.f;
   static constexpr float k_sample_rate_recip = 1.f / k_sample_rate_hz;
   static constexpr float k_two_pi = 6.2831853071795864769f;
+  static constexpr float k_fm_depth_scale = 2.f;
   static constexpr float k_amp_attack = 0.08f;
   static constexpr float k_amp_release = 0.0025f;
 
@@ -284,6 +287,10 @@ class Synth {
   static inline float midiNoteToW0(float note) {
     const float hz = 440.f * std::pow(2.f, (note - 69.f) * (1.f / 12.f));
     return hz * k_sample_rate_recip;
+  }
+
+  static inline float velocityToAmp(uint8_t velocity) {
+    return 0.15f + 0.85f * (velocity * (1.f / 127.f));
   }
 
   static inline void applyLfo3Modulation(uint8_t target, float mod, float &fmDepth,
