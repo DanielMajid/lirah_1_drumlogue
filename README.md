@@ -1,5 +1,7 @@
 # Lirah-1 (NTS-1 mkII)
 
+> Drumlogue project docs: see `drumlogue-lirah-1/README.md`.
+
 `Lirah-1` is a Lyra-8 inspired oscillator for the Korg NTS-1 mkII (`osc` module).
 
 This project is based on the original Lyre-1 project by James D. Cheetham:
