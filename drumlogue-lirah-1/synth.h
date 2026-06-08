@@ -142,8 +142,10 @@ class Synth {
 
       const float carrW0 = w0 * oscFreqMul * hyperMod + fmSig * fmScale * k_sample_rate_recip;
 
-      const float mainOsc =
-          0.5f * std::sinf(k_two_pi * carrierPhase_) * (1.f + foldNow) * (1.f + prevSample_ * feedbackNow);
+      const float carrier = 0.5f * std::sinf(k_two_pi * carrierPhase_);
+      const float foldDrive = 1.f + foldNow;
+      const float feedbackMix = 1.f + prevSample_ * feedbackNow;
+      const float mainOsc = carrier * foldDrive * feedbackMix;
 
       carrierPhase_ += carrW0;
       carrierPhase_ -= static_cast<uint32_t>(carrierPhase_);

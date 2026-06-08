@@ -88,7 +88,7 @@ ifneq ($(DEBUG),)
   USE_LTO := no
   UDEFS += -DDEBUG
   ifeq ($(DEBUG_OPTIM),)
-    USE_OPT += -Og ## Debug friendly optimizatiions
+    USE_OPT += -Og ## Debug friendly optimizations
   else
     USE_OPT += $(DEBUG_OPTIM)
   endif
