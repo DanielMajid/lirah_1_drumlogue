@@ -1,48 +1,46 @@
 ##############################################################################
-# Configuration for Makefile
+# Project Configuration
 #
 
-PROJECT := Lirah-1
-PROJECT_TYPE := osc
+PROJECT := lirah_1_drumlogue
+PROJECT_TYPE := synth
 
 ##############################################################################
 # Sources
 #
 
-# C sources 
-UCSRC = header.c
+# C sources
+CSRC = header.c
 
-# C++ sources 
-UCXXSRC = unit.cc
+# C++ sources
+CXXSRC = unit.cc
 
 # List ASM source files here
-UASMSRC = 
+ASMSRC =
 
-UASMXSRC = 
+ASMXSRC =
 
 ##############################################################################
 # Include Paths
 #
 
-UINCDIR  = $(PROJECT_ROOT) \
-            $(PROJECT_ROOT)/logue-sdk/platform/nts-1_mkii/common \
-            $(PROJECT_ROOT)/logue-sdk/platform/common
+UINCDIR  =
 
 ##############################################################################
 # Library Paths
 #
 
-ULIBDIR = 
+ULIBDIR =
 
 ##############################################################################
 # Libraries
 #
 
 ULIBS  = -lm
+ULIBS += -lc
 
 ##############################################################################
 # Macros
 #
 
-UDEFS = 
-
+UDEFS =

@@ -1,67 +1,74 @@
-# Lirah-1 (NTS-1 mkII)
+# Lirah-1 Drumlogue Synth Unit
 
-> Drumlogue project docs: see `drumlogue-lirah-1/README.md`.
+`lirah_1_drumlogue` is a drumlogue synth-unit adaptation of the Lirah-1 voice.
 
-`Lirah-1` is a Lyra-8 inspired oscillator for the Korg NTS-1 mkII (`osc` module).
+## User Manual
 
-This project is based on the original Lyre-1 project by James D. Cheetham:
-https://github.com/jamesdcheetham/Lyre-1
+### Sound engine overview
 
-Lyra-8 from SOMA Laboratory https://somasynths.com/
+- Sine-carrier + sine-modulator FM core.
+- Hyper-LFO behavior from two LFO lanes that are AND-gated.
+- Wave folding and feedback in the carrier path.
+- Extra assignable modulation lane (`LFO TARGET` + `LFO RATE`).
+- Velocity-sensitive amplitude and pressure/aftertouch FM response.
 
-Ported to NTS-1 mkII by Daniel Majid Mirzakhani.
+### Parameters
 
-## Highlights
+1. `FM DEPTH` (`0..1023`): FM modulation amount.
+2. `HYPER LFO` (`0..1023`): Depth of Hyper-LFO pitch movement.
+3. `LFO1 RATE` (`0..100`): Hyper-LFO lane 1 rate.
+4. `LFO2 RATE` (`0..100`): Hyper-LFO lane 2 rate.
+5. `FOLD` (`0..100`): Wave-fold amount.
+6. `FM TUNE` (`0..100`): Modulator tuning offset.
+7. `PITCH` (`0..100`): Carrier tuning offset.
+8. `FEEDBACK` (`0..100`): Feedback amount.
+9. `LFO TARGET` (`0..8`): Selects destination for the extra modulation lane.
+10. `LFO RATE` (`0..100`): Rate for the extra modulation lane.
 
-- Sine-core voice with FM, wave folding, and feedback.
-- Hyper LFO behavior from two internal LFOs that are AND-gated.
-- Extra assignable modulation source (`LFO 3`) with selectable target and rate.
-- Playable range tuning for both modulator pitch and carrier pitch.
+### `LFO TARGET` map
 
-## Controls
+- `0` = `OFF`
+- `1` = `FMDEP`
+- `2` = `HDEP`
+- `3` = `HR1`
+- `4` = `HR2`
+- `5` = `FOLD`
+- `6` = `FMTUN`
+- `7` = `OTUN`
+- `8` = `FDBK`
 
-- `Knob A (FM DEPTH)`: FM amount from the modulator into the carrier.
-- `Knob B (HYPER LFO)`: Depth of the Hyper LFO pitch jump.
-- `LFO1 RATE`: Rate of Hyper LFO lane 1.
-- `LFO2 RATE`: Rate of Hyper LFO lane 2.
-- `FOLD`: Amount of wave folding.
-- `FM TUNE`: Relative tuning of the modulator (up to one octave).
-- `PITCH`: Relative tuning of the carrier (up to one octave).
-- `FEEDBACK`: Feedback amount in the carrier path.
-- `LFO3 TARGET`: Chooses what `LFO 3` modulates.
-- `LFO3 RATE`: Rate of `LFO 3` with slow-focus scaling (`0-50%` = `0-1 Hz`, `50-100%` = `1-25 Hz`).
+### Performance behavior
 
-### LFO TARGET Map
+- `Note On`: sets pitch and amplitude from velocity.
+- `Note Off`/`All Note Off`: releases envelope.
+- `Pitch Bend`: ±2 semitone range.
+- `Channel Pressure`/`Aftertouch`: scales FM depth response.
 
-- `OFF`
-- `FMDEPTH`
-- `HYPER LFO DEPTH`
-- `HYPER LFO 1`
-- `HYPER LFO 2`
-- `FOLD`
-- `FM TUNE`
-- `CARRIER TUNE`
-- `FEEDBACK`
+## Build Instructions
 
-## To build this project
+### Prerequisites
 
-- Clone this repo 
-    In desired directory:
+- A working ARM cross toolchain that supports:
+  - `-march=armv7-a`
+  - `-mfpu=neon-vfpv4`
+  - `-mfloat-abi=hard`
+- GNU Make
 
-    Download this repo
+### Build commands
 
-    git clone --recurse-submodules https://github.com/DanielMajid/Lirah-1.git
+From repository root:
 
-- Download the ARM GCC toolchain
+```sh
+cd drumlogue-lirah-1
+make clean
+make CROSS_COMPILE=arm-none-eabi-
+make CROSS_COMPILE=arm-none-eabi- install
+```
 
-    cd logue-sdk/tools/gcc/
-    ./get_gcc_osx.sh
-    Run Make command to build binary
+Build outputs are generated in `drumlogue-lirah-1/build/`, and install places:
 
-- Compile project
-    Run "make install"
-    Open Korg Kontrol Editor
+- `drumlogue-lirah-1/lirah_1_drumlogue.drmlgunit`
 
-- Load Project
-    Drag .nts1mkiiunit file into the appropriate module category
-    Click sync
+### Load on drumlogue
+
+Use the drumlogue unit loader workflow to import `lirah_1_drumlogue.drmlgunit` into a synth slot.
