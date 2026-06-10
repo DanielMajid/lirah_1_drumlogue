@@ -1,9 +1,13 @@
 /**
  *  @file header.c
- *  @brief Lirah-1 drumlogue synth header
+ *  @brief drumlogue SDK unit header for Lirah-1 synth
+ *
+ *  Copyright (c) 2026.
  */
 
-#include "unit.h"
+#include "unit.h"  // Note: Include common definitions for all units
+
+// ---- Unit header definition  --------------------------------------------------------------------
 
 const __unit_header unit_header_t unit_header = {
     .header_size = sizeof(unit_header_t),
@@ -11,9 +15,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,
     .dev_id = 0x4D616A69U,
     .unit_id = 0x00000004U,
-    .version = 0x00010000U,
+    .version = 0x00010001U,
     .name = "Lirah-1Drm",
-    .num_presets = 0,
+    .num_presets = 8,
     .num_params = 10,
     .params = {
         {0, 1023, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FM DEPTH"}},

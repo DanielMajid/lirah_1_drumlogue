@@ -48,26 +48,21 @@
 
 ### Prerequisites
 
-- A working ARM cross toolchain that supports:
-  - `-march=armv7-a`
-  - `-mfpu=neon-vfpv4`
-  - `-mfloat-abi=hard`
-- GNU Make
+- logue-sdk Docker environment
 
 ### Build commands
 
-From repository root:
+From the logue-sdk root:
 
 ```sh
-cd drumlogue-lirah-1
-make clean
-make CROSS_COMPILE=arm-none-eabi-
-make CROSS_COMPILE=arm-none-eabi- install
+./docker/run_cmd.sh build drumlogue/lirah_1_drumlogue
 ```
 
-Build outputs are generated in `drumlogue-lirah-1/build/`, and install places:
+If this repository is outside `logue-sdk/platform/drumlogue/`, copy or symlink it there before building.
 
-- `drumlogue-lirah-1/lirah_1_drumlogue.drmlgunit`
+Build outputs are generated in `lirah_1_drumlogue/build/`, and install places:
+
+- `lirah_1_drumlogue/lirah_1_drumlogue.drmlgunit`
 
 ### Load on drumlogue
 

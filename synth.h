@@ -8,6 +8,9 @@
 
 class Synth {
  public:
+  static constexpr uint8_t k_num_params = 10;
+  static constexpr uint8_t k_num_presets = 8;
+
   enum ParameterId : uint8_t {
     k_param_fm_depth = 0,
     k_param_hyper_lfo_depth,
@@ -73,6 +76,16 @@ class Synth {
 
   inline void Reset() {
     params_.reset();
+    rawParams_[k_param_fm_depth] = 0;
+    rawParams_[k_param_hyper_lfo_depth] = 0;
+    rawParams_[k_param_lfo1_rate] = 10;
+    rawParams_[k_param_lfo2_rate] = 20;
+    rawParams_[k_param_fold] = 0;
+    rawParams_[k_param_fm_tune] = 0;
+    rawParams_[k_param_pitch] = 0;
+    rawParams_[k_param_feedback] = 0;
+    rawParams_[k_param_lfo3_target] = 0;
+    rawParams_[k_param_lfo3_rate] = 10;
     carrierPhase_ = 0.f;
     modPhase_ = 0.f;
     lfo1Phase_ = 0.f;
@@ -87,6 +100,7 @@ class Synth {
     velocityAmp_ = 1.f;
     ampEnv_ = 0.f;
     tempoBpm_ = 120.f;
+    presetIndex_ = 0;
   }
 
   inline void Resume() {}
@@ -110,7 +124,7 @@ class Synth {
 
       lfo3Phase_ += lfo3W0;
       lfo3Phase_ -= static_cast<uint32_t>(lfo3Phase_);
-      const float lfo3 = std::sinf(k_two_pi * lfo3Phase_);
+      const float lfo3 = std::sin(k_two_pi * lfo3Phase_);
 
       applyLfo3Modulation(p.lfo3Target, lfo3, fmDepthNow, hyperDepthNow, hyperRate1Now,
                           hyperRate2Now, foldNow, modTuneNow, oscTuneNow, feedbackNow);
@@ -124,8 +138,8 @@ class Synth {
       lfo2Phase_ += lfo2W0Now;
       lfo2Phase_ -= static_cast<uint32_t>(lfo2Phase_);
 
-      const float lfo1Out = std::sinf(k_two_pi * lfo1Phase_);
-      const float lfo2Out = std::sinf(k_two_pi * lfo2Phase_);
+      const float lfo1Out = std::sin(k_two_pi * lfo1Phase_);
+      const float lfo2Out = std::sin(k_two_pi * lfo2Phase_);
 
       const float hyperGate = (lfo1Out >= 0.f && lfo2Out >= 0.f) ? 3.f : 0.f;
       const float hyperMod = 1.f + hyperGate * hyperDepthNow;
@@ -136,13 +150,13 @@ class Synth {
       const float w0 = baseW0_ * pitchBendMul_;
       const float modW0 = w0 * modFreqMul * hyperMod;
 
-      const float fmSig = std::sinf(k_two_pi * modPhase_);
+      const float fmSig = std::sin(k_two_pi * modPhase_);
       modPhase_ += modW0;
       modPhase_ -= static_cast<uint32_t>(modPhase_);
 
       const float carrW0 = w0 * oscFreqMul * hyperMod + fmSig * fmScale * k_sample_rate_recip;
 
-      const float carrier = 0.5f * std::sinf(k_two_pi * carrierPhase_);
+      const float carrier = 0.5f * std::sin(k_two_pi * carrierPhase_);
       const float foldDrive = 1.f + foldNow;
       const float feedbackMix = 1.f + prevSample_ * feedbackNow;
       const float mainOsc = carrier * foldDrive * feedbackMix;
@@ -167,6 +181,9 @@ class Synth {
   }
 
   inline void setParameter(uint8_t index, int32_t value) {
+    if (index < k_num_params)
+      rawParams_[index] = value;
+
     switch (index) {
       case k_param_fm_depth:
         params_.fmDepth = value * k_fm_depth_scale;
@@ -212,7 +229,11 @@ class Synth {
     }
   }
 
-  inline int32_t getParameterValue(uint8_t) const { return 0; }
+  inline int32_t getParameterValue(uint8_t index) const {
+    if (index >= k_num_params)
+      return 0;
+    return rawParams_[index];
+  }
 
   inline const char *getParameterStrValue(uint8_t index, int32_t value) const {
     static const char *targetNames[] = {"OFF", "FMDEP", "HDEP", "HR1", "HR2",
@@ -263,16 +284,45 @@ class Synth {
 
   inline void SetTempo(float tempoBpm) { tempoBpm_ = tempoBpm; }
 
-  inline void LoadPreset(uint8_t idx) { (void)idx; }
+  inline void LoadPreset(uint8_t idx) {
+    if (idx >= k_num_presets)
+      idx = 0;
 
-  inline uint8_t getPresetIndex() const { return 0; }
+    const Preset &preset = presets()[idx];
+    for (uint8_t i = 0; i < k_num_params; ++i) {
+      setParameter(i, preset.values[i]);
+    }
+    presetIndex_ = idx;
+  }
+
+  inline uint8_t getPresetIndex() const { return presetIndex_; }
 
   static inline const char *getPresetName(uint8_t idx) {
-    (void)idx;
-    return nullptr;
+    if (idx >= k_num_presets)
+      return nullptr;
+    return presets()[idx].name;
   }
 
  private:
+  struct Preset {
+    const char *name;
+    int32_t values[k_num_params];
+  };
+
+  static inline const Preset *presets() {
+    static const Preset k_presets[k_num_presets] = {
+        {"Init", {0, 0, 10, 20, 0, 0, 0, 0, 0, 10}},
+        {"HyperFM", {700, 480, 40, 32, 22, 18, 0, 8, 1, 55}},
+        {"Glass", {560, 260, 22, 35, 45, 30, 8, 16, 5, 48}},
+        {"AcidFM", {850, 120, 55, 48, 18, 36, 12, 24, 8, 62}},
+        {"WashPad", {340, 780, 6, 8, 12, 20, 0, 5, 2, 38}},
+        {"Pluck", {500, 150, 28, 42, 28, 15, 4, 12, 7, 52}},
+        {"Drone", {430, 900, 3, 5, 35, 44, 18, 20, 4, 25}},
+        {"Chaos", {980, 650, 65, 61, 72, 62, 25, 34, 3, 70}},
+    };
+    return k_presets;
+  }
+
   static constexpr float k_sample_rate_hz = 48000.f;
   static constexpr float k_sample_rate_recip = 1.f / k_sample_rate_hz;
   static constexpr float k_two_pi = 6.2831853071795864769f;
@@ -342,4 +392,6 @@ class Synth {
   float velocityAmp_;
   float ampEnv_;
   float tempoBpm_;
+  uint8_t presetIndex_;
+  int32_t rawParams_[k_num_params];
 };

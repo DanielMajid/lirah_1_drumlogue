@@ -24,6 +24,9 @@ ASMXSRC =
 # Include Paths
 #
 
+COMMON_INC_PATH = /workspace/drumlogue/common
+COMMON_SRC_PATH = /workspace/drumlogue/common
+
 UINCDIR  =
 
 ##############################################################################
