@@ -2,7 +2,7 @@
 # Project Configuration
 #
 
-PROJECT := lirah_1_drumlogue
+PROJECT := lirah_1_drumlogue_poly
 PROJECT_TYPE := synth
 
 ##############################################################################
