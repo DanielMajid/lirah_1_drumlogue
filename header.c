@@ -15,10 +15,11 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,
     .dev_id = 0x4D616A69U,
     .unit_id = 0x00000005U,
-    .version = 0x00010001U,
+    // Version format: 0x00MMmmpp (major/minor/patch)
+    .version = 0x00010002U,
     .name = "Lirah-1Ply",
     .num_presets = 8,
-    .num_params = 14,
+    .num_params = 19,
     .params = {
         // ---- Original 10 parameters ----------------------------------------
         {0, 1023, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FM DEPTH"}},
@@ -31,19 +32,21 @@ const __unit_header unit_header_t unit_header = {
         {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FEEDBACK"}},
         {0,    8, 0,  0, k_unit_param_type_strings, 0, 0, 0, {"LFO TARGET"}},
         {0,  100, 0, 10, k_unit_param_type_none,    0, 0, 0, {"LFO RATE"}},
-        // ---- Voice spread parameters (params 10-13) ------------------------
+        {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"LFO DEPTH"}},
+        // ---- Voice spread parameters (params 11-14) ------------------------
         // Each spreads the named parameter across the 4 voices symmetrically.
         // At 0 all voices are identical; increasing the value widens the spread.
         {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FM SPREAD"}},
         {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FOLD SPRD"}},
         {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FDBK SPRD"}},
         {0,  100, 0,  0, k_unit_param_type_none,    0, 0, 0, {"TUN SPREAD"}},
+        // ---- Envelope parameters (params 15-18) ---------------------------
+        // ENV TYPE options: 0=AR, 1=ADSR, 2=AHR, 3=LOOP, 4=OPEN
+        {0,    4, 0,  0, k_unit_param_type_strings, 0, 0, 0, {"ENV TYPE"}},
+        {0,    2, 0,  1, k_unit_param_type_strings, 0, 0, 0, {"ENV RANGE"}},
+        {0,  100, 0, 20, k_unit_param_type_none,    0, 0, 0, {"ATTACK"}},
+        {0,  100, 0, 35, k_unit_param_type_none,    0, 0, 0, {"RELEASE"}},
         // ---- Unused slots (SDK requires 24 entries total) -------------------
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},

@@ -13,6 +13,9 @@
 
 static Synth s_synth_instance;
 static unit_runtime_desc_t s_runtime_desc;
+// Host-facing snapshot of parameter values.
+// The drumlogue host asks us for values through this cache, and we also use it
+// to restore state after resets.
 static int32_t s_cached_values[UNIT_MAX_PARAM_COUNT];
 
 // ---- Callback entry points from drumlogue runtime ----------------------------------------------
@@ -29,6 +32,7 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
 
   s_runtime_desc = *desc;
 
+  // Start from header defaults so first boot is deterministic.
   for (uint32_t i = 0; i < UNIT_MAX_PARAM_COUNT; ++i) {
     s_cached_values[i] = unit_header.params[i].init;
   }
@@ -37,6 +41,7 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   if (ret != k_unit_err_none)
     return ret;
 
+  // Push cached values into the synth engine.
   for (uint8_t i = 0; i < unit_header.num_params; ++i) {
     s_synth_instance.setParameter(i, s_cached_values[i]);
   }
@@ -50,6 +55,7 @@ __unit_callback void unit_teardown() {
 
 __unit_callback void unit_reset() {
   s_synth_instance.Reset();
+  // After DSP reset, restore the last host-visible parameter state.
   for (uint8_t i = 0; i < unit_header.num_params; ++i) {
     s_synth_instance.setParameter(i, s_cached_values[i]);
   }
@@ -78,6 +84,7 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value) {
   if (value > p.max)
     value = p.max;
 
+  // Keep host and DSP state in lockstep.
   s_cached_values[id] = value;
   s_synth_instance.setParameter(id, value);
 }
@@ -145,6 +152,7 @@ __unit_callback void unit_aftertouch(uint8_t note, uint8_t aftertouch) {
 }
 
 __unit_callback void unit_load_preset(uint8_t idx) {
+  // Loading a preset updates DSP first, then mirrors values into host cache.
   s_synth_instance.LoadPreset(idx);
   for (uint8_t i = 0; i < unit_header.num_params; ++i) {
     s_cached_values[i] = s_synth_instance.getParameterValue(i);

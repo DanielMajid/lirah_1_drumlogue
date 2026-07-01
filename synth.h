@@ -25,8 +25,8 @@
 class Synth {
  public:
   static constexpr uint8_t k_num_voices  = 4;
-  // 10 original params + 4 spread params (FM, Fold, Feedback, Tune)
-  static constexpr uint8_t k_num_params  = 14;
+  // 10 original params + LFO3 depth + 4 spread params + 4 envelope params
+  static constexpr uint8_t k_num_params  = 19;
   static constexpr uint8_t k_num_presets = 8;
 
   // Output is divided by voice count to keep full-chord level consistent
@@ -46,11 +46,31 @@ class Synth {
     k_param_feedback,           // Output-to-input feedback (0-100)
     k_param_lfo3_target,        // Which param LFO3 modulates (enum string)
     k_param_lfo3_rate,          // LFO3 rate (0-100, logarithmic mapping)
-    // ---- Voice spread parameters (params 10-13) ----------------------------
+    k_param_lfo3_depth,         // LFO3 modulation depth (0-100)
+    // ---- Voice spread parameters -------------------------------------------
     k_param_fm_spread,          // FM depth spread across voices (0-100)
     k_param_fold_spread,        // Wavefold spread across voices (0-100)
     k_param_feedback_spread,    // Feedback spread across voices (0-100)
     k_param_tune_spread,        // Pitch detune spread in semitones (0-100)
+    // ---- Envelope parameters -----------------------------------------------
+    k_param_env_type,           // Envelope mode: AR / ADSR / AHR
+    k_param_env_speed,          // Envelope speed range: FAST / MED / SLOW
+    k_param_env_attack,         // Envelope attack amount (0-100)
+    k_param_env_release,        // Envelope release amount (0-100)
+  };
+
+  enum EnvelopeType : uint8_t {
+    k_env_type_ar = 0,   // Attack then Release (simple synth envelope)
+    k_env_type_adsr,     // Attack, Decay, Sustain, Release
+    k_env_type_ahr,      // Attack, Hold, Release
+    k_env_type_loop_ar,  // Repeats Attack->Release while gate is held
+    k_env_type_open,     // No shape; gate directly controls full amplitude
+  };
+
+  enum EnvelopeSpeed : uint8_t {
+    k_env_speed_fast = 0,
+    k_env_speed_med,
+    k_env_speed_slow,
   };
 
   // Targets available for LFO3 scene modulation
@@ -79,12 +99,19 @@ class Synth {
     float feedback;         // Feedback coefficient
     uint8_t lfo3Target;     // Which param LFO3 sweeps
     float lfo3Rate;         // LFO3 frequency in Hz
+    float lfo3Depth;        // LFO3 modulation depth (0-1)
     // Per-voice spread amounts — the physical offset applied per voice step.
     // Voice positions are -1.5, -0.5, +0.5, +1.5 so the mean is always 0.
     float fmSpread;         // FM depth delta per voice step (native units)
     float foldSpread;       // Wavefold delta per voice step
     float feedbackSpread;   // Feedback delta per voice step
     float tuneSpread;       // Detune in semitones per voice step
+    uint8_t envType;        // Envelope type selector
+    uint8_t envSpeed;       // Envelope speed range selector
+    float envAttackNorm;    // Raw attack control normalized 0-1
+    float envReleaseNorm;   // Raw release control normalized 0-1
+    float envAttackSec;     // Attack duration in seconds (speed-scaled)
+    float envReleaseSec;    // Release duration in seconds (speed-scaled)
 
     inline void reset() {
       fmDepth        = 0.f;
@@ -97,10 +124,17 @@ class Synth {
       feedback       = 0.f;
       lfo3Target     = k_lfo3_target_off;
       lfo3Rate       = 0.f;
+      lfo3Depth      = 0.f;
       fmSpread       = 0.f;
       foldSpread     = 0.f;
       feedbackSpread = 0.f;
       tuneSpread     = 0.f;
+      envType        = k_env_type_ar;
+      envSpeed       = k_env_speed_med;
+      envAttackNorm  = 0.2f;
+      envReleaseNorm = 0.35f;
+      envAttackSec   = 0.03f;
+      envReleaseSec  = 0.2f;
     }
   };
 
@@ -111,6 +145,15 @@ class Synth {
   // rhythms, producing the chorusing / "washy" effect when voices diverge.
 
   struct Voice {
+    enum EnvStage : uint8_t {
+      k_env_stage_off = 0,
+      k_env_stage_attack,
+      k_env_stage_decay,
+      k_env_stage_hold,
+      k_env_stage_sustain,
+      k_env_stage_release,
+    };
+
     float carrierPhase;   // FM carrier phase accumulator (0-1)
     float modPhase;       // FM modulator phase accumulator (0-1)
     float lfo1Phase;      // Hyper-LFO 1 phase accumulator (0-1)
@@ -119,7 +162,11 @@ class Synth {
     float baseW0;         // Normalized note frequency: Hz / sampleRate
     float velocityAmp;    // Amplitude scaled from MIDI velocity
     float ampEnv;         // Running amplitude envelope (0-velocityAmp)
+    float envStageStart;  // Envelope value at stage entry
+    uint32_t envStagePos; // Number of samples elapsed in current stage
+    uint32_t envStageDur; // Duration in samples for the current stage
     bool  gateOn;         // True while MIDI note is held
+    uint8_t envStage;     // Current envelope stage
     uint8_t note;         // MIDI note number; 0xFF = slot is free
     uint32_t age;         // Monotonic counter value at trigger time (for steal)
 
@@ -132,7 +179,11 @@ class Synth {
       baseW0       = 0.f;
       velocityAmp  = 0.f;
       ampEnv       = 0.f;
+      envStageStart = 0.f;
+      envStagePos   = 0;
+      envStageDur   = 0;
       gateOn       = false;
+      envStage     = k_env_stage_off;
       note         = 0xFF; // sentinel: slot is unoccupied
       age          = 0;
     }
@@ -161,6 +212,11 @@ class Synth {
     rawParams_[k_param_lfo1_rate] = 10;
     rawParams_[k_param_lfo2_rate] = 20;
     rawParams_[k_param_lfo3_rate] = 10;
+    rawParams_[k_param_lfo3_depth] = 0;
+    rawParams_[k_param_env_type] = k_env_type_ar;
+    rawParams_[k_param_env_speed] = k_env_speed_med;
+    rawParams_[k_param_env_attack] = 20;
+    rawParams_[k_param_env_release] = 35;
 
     // Reset all voice slots to inactive
     for (uint8_t i = 0; i < k_num_voices; ++i)
@@ -200,7 +256,8 @@ class Synth {
                                   float fmDepth,  float hyperDepth,
                                   float hyperRate1, float hyperRate2,
                                   float fold,     float modTune,
-                                  float oscTune,  float feedback) {
+                                  float oscTune,  float feedback,
+                                  const Params &p) {
     // Advance this voice's hyper-LFOs independently so held chords diverge
     v.lfo1Phase += hyperRate1 * k_sample_rate_recip;
     v.lfo1Phase -= static_cast<uint32_t>(v.lfo1Phase);
@@ -244,14 +301,7 @@ class Synth {
 
     v.prevSample = clampf(mainOsc, -1.f, 1.f);
 
-    // Exponential amplitude envelope — glide toward target using one-pole filter
-    const float targetAmp = v.gateOn ? v.velocityAmp : 0.f;
-    const float envCoeff  = v.gateOn ? k_amp_attack   : k_amp_release;
-    v.ampEnv += (targetAmp - v.ampEnv) * envCoeff;
-
-    // Once a released voice fully decays, mark its slot free for reuse
-    if (!v.gateOn && v.ampEnv < 1e-5f)
-      v.note = 0xFF;
+    updateEnvelope(v, p);
 
     return folded * v.ampEnv;
   }
@@ -261,23 +311,12 @@ class Synth {
     const Params p      = params_;
     const float lfo3W0  = p.lfo3Rate * k_sample_rate_recip;
 
-    // Pre-compute per-voice pitch-detune multipliers once per render block.
-    // Each voice sits at position {-1.5, -0.5, +0.5, +1.5} so the mean
-    // detune across all voices is always 0 — the root pitch is preserved.
-    // std::pow is called only 4 times per block, never inside the sample loop.
-    float voiceW0Mul[k_num_voices];
-    for (uint8_t vi = 0; vi < k_num_voices; ++vi) {
-      const float spreadPos = static_cast<float>(vi) - 1.5f;
-      const float semitones = p.tuneSpread * spreadPos;
-      voiceW0Mul[vi] = std::pow(2.f, semitones * (1.f / 12.f));
-    }
-
     float *out_p = out;
     for (size_t i = 0; i < frames; ++i, out_p += 2) {
       // Advance the global LFO3 once per sample (shared scene modulator)
       lfo3Phase_ += lfo3W0;
       lfo3Phase_ -= static_cast<uint32_t>(lfo3Phase_);
-      const float lfo3 = std::sin(k_two_pi * lfo3Phase_);
+      const float lfo3 = std::sin(k_two_pi * lfo3Phase_) * p.lfo3Depth;
 
       // Start from global param values and apply LFO3 modulation.
       // Each voice will then add its own spread offset on top of these.
@@ -295,31 +334,39 @@ class Synth {
                           sceneHyperRate1, sceneHyperRate2,
                           sceneFold, sceneModTune, sceneOscTune, sceneFeedback);
 
-      // Accumulate all voice outputs into a mono mix
-      float mix = 0.f;
+      // Build a list of active voices first.
+      // We spread based on this active list (not fixed slot index), so 1/2/3
+      // note chords stay centered and do not lean to one side.
+      uint8_t activeVoices[k_num_voices];
+      uint8_t activeCount = 0;
       for (uint8_t vi = 0; vi < k_num_voices; ++vi) {
-        Voice &v = voices_[vi];
-
-        // Skip slots that are both unassigned and fully silent
+        const Voice &v = voices_[vi];
         if (v.note == 0xFF && v.ampEnv < 1e-5f)
           continue;
+        activeVoices[activeCount++] = vi;
+      }
 
-        // Voice spread: positions are -1.5, -0.5, +0.5, +1.5.
-        // Adding p.*Spread * spreadPos shifts each voice's parameter by an
-        // equal step in opposite directions, so the chord average equals
-        // the unspread global value.
-        const float spreadPos = static_cast<float>(vi) - 1.5f;
+      // Accumulate all voice outputs into a mono mix
+      float mix = 0.f;
+      for (uint8_t slot = 0; slot < activeCount; ++slot) {
+        const uint8_t vi = activeVoices[slot];
+        Voice &v = voices_[vi];
+
+        // Active voices are always laid out around 0:
+        // N=1: {0}, N=2: {-0.5,+0.5}, N=3: {-1,0,+1}, N=4: {-1.5,-0.5,+0.5,+1.5}
+        const float spreadPos = static_cast<float>(slot) - 0.5f * (static_cast<float>(activeCount) - 1.f);
 
         const float fmDepth  = clampf(sceneFmDepth   + p.fmSpread       * spreadPos, 0.f, 2046.f);
         const float fold     = clampf(sceneFold       + p.foldSpread     * spreadPos, 0.f, 10.f);
         const float feedback = clampf(sceneFeedback   + p.feedbackSpread * spreadPos, 0.f, 2.f);
 
-        // Apply pre-computed pitch detune for this voice position
-        const float voiceBaseW0 = v.baseW0 * voiceW0Mul[vi];
+        // Apply centered tune spread for this active-voice slot.
+        const float semitones = p.tuneSpread * spreadPos;
+        const float voiceBaseW0 = v.baseW0 * std::pow(2.f, semitones * (1.f / 12.f));
 
         mix += renderVoiceSample(v, voiceBaseW0, fmDepth, sceneHyperDepth,
                                  sceneHyperRate1, sceneHyperRate2,
-                                 fold, sceneModTune, sceneOscTune, feedback);
+                                 fold, sceneModTune, sceneOscTune, feedback, p);
       }
 
       // Scale the summed output to prevent clipping with multiple active voices
@@ -371,6 +418,9 @@ class Synth {
         params_.lfo3Rate = (norm <= 0.5f) ? norm * 2.f
                                           : 1.f + (norm - 0.5f) * 48.f;
       } break;
+      case k_param_lfo3_depth:
+        params_.lfo3Depth = clampf(value * 0.01f, 0.f, 1.f);
+        break;
 
       // ---- Spread parameters (0-100 raw → physical spread per voice step) --
 
@@ -391,6 +441,26 @@ class Synth {
         params_.tuneSpread = value * 0.01f;
         break;
 
+      case k_param_env_type:
+        if (value < k_env_type_ar)     value = k_env_type_ar;
+        if (value > k_env_type_open)   value = k_env_type_open;
+        params_.envType = static_cast<uint8_t>(value);
+        break;
+      case k_param_env_speed:
+        if (value < k_env_speed_fast)  value = k_env_speed_fast;
+        if (value > k_env_speed_slow)  value = k_env_speed_slow;
+        params_.envSpeed = static_cast<uint8_t>(value);
+        updateEnvelopeTimes();
+        break;
+      case k_param_env_attack:
+        params_.envAttackNorm = clampf(value * 0.01f, 0.f, 1.f);
+        updateEnvelopeTimes();
+        break;
+      case k_param_env_release:
+        params_.envReleaseNorm = clampf(value * 0.01f, 0.f, 1.f);
+        updateEnvelopeTimes();
+        break;
+
       default:
         break;
     }
@@ -405,11 +475,28 @@ class Synth {
   inline const char *getParameterStrValue(uint8_t index, int32_t value) const {
     static const char *targetNames[] = {"OFF",   "FMDEP", "HDEP", "HR1", "HR2",
                                         "FOLD",  "FMTUN", "OTUN", "FDBK"};
-    if (index != k_param_lfo3_target)
-      return nullptr;
-    if (value < k_lfo3_target_off)       value = k_lfo3_target_off;
-    if (value > k_lfo3_target_feedback)  value = k_lfo3_target_feedback;
-    return targetNames[value];
+    static const char *envTypeNames[] = {"AR", "ADSR", "AHR", "LOOP", "OPEN"};
+    static const char *envSpeedNames[] = {"FAST", "MED", "SLOW"};
+
+    if (index == k_param_lfo3_target) {
+      if (value < k_lfo3_target_off)       value = k_lfo3_target_off;
+      if (value > k_lfo3_target_feedback)  value = k_lfo3_target_feedback;
+      return targetNames[value];
+    }
+
+    if (index == k_param_env_type) {
+      if (value < k_env_type_ar)    value = k_env_type_ar;
+      if (value > k_env_type_open)  value = k_env_type_open;
+      return envTypeNames[value];
+    }
+
+    if (index == k_param_env_speed) {
+      if (value < k_env_speed_fast) value = k_env_speed_fast;
+      if (value > k_env_speed_slow) value = k_env_speed_slow;
+      return envSpeedNames[value];
+    }
+
+    return nullptr;
   }
 
   inline const uint8_t *getParameterBmpValue(uint8_t, int32_t) const { return nullptr; }
@@ -463,6 +550,7 @@ class Synth {
     v.lfo1Phase    = 0.f;
     v.lfo2Phase    = 0.f;
     v.prevSample   = 0.f;
+    startEnvelopeStage(v, Voice::k_env_stage_attack, params_.envAttackSec);
   }
 
   inline void NoteOff(uint8_t note) {
@@ -529,23 +617,25 @@ class Synth {
 
   struct Preset {
     const char *name;
-    // 14 values: [fmDep, hLfo, lfo1, lfo2, fold, fmTune, pitch, fdbk,
-    //             lfo3Tgt, lfo3Rate, fmSprd, foldSprd, fdbkSprd, tuneSprd]
+    // 19 values: [fmDep, hLfo, lfo1, lfo2, fold, fmTune, pitch, fdbk,
+    //             lfo3Tgt, lfo3Rate, lfo3Depth,
+    //             fmSprd, foldSprd, fdbkSprd, tuneSprd,
+    //             envType, envSpd, atk, rel]
     int32_t values[k_num_params];
   };
 
   static inline const Preset *presets() {
     static const Preset k_presets[k_num_presets] = {
       // Spread params all zero in Init — behaves identically to monophonic original
-      {"Init",    {  0,   0, 10, 20,  0,  0,  0,  0, 0, 10,  0,  0,  0,  0}},
+      {"Init",    {  0,   0, 10, 20,  0,  0,  0,  0, 0, 10,  0,  0,  0,  0,  0, 0, 1, 20, 35}},
       // Presets with spread values chosen to accent each preset's character:
-      {"HyperFM", {700, 480, 40, 32, 22, 18,  0,  8, 1, 55, 20,  5,  5,  8}},
-      {"Glass",   {560, 260, 22, 35, 45, 30,  8, 16, 5, 48, 10, 15,  3, 12}},
-      {"AcidFM",  {850, 120, 55, 48, 18, 36, 12, 24, 8, 62, 30,  5,  8,  5}},
-      {"WashPad", {340, 780,  6,  8, 12, 20,  0,  5, 2, 38, 15, 20, 10, 20}},
-      {"Pluck",   {500, 150, 28, 42, 28, 15,  4, 12, 7, 52, 10,  8,  5, 10}},
-      {"Drone",   {430, 900,  3,  5, 35, 44, 18, 20, 4, 25, 25, 25, 15, 30}},
-      {"Chaos",   {980, 650, 65, 61, 72, 62, 25, 34, 3, 70, 50, 40, 20, 25}},
+      {"HyperFM", {700, 480, 40, 32, 22, 18,  0,  8, 1, 55, 100, 20,  5,  5,  8, 0, 0, 15, 18}},
+      {"Glass",   {560, 260, 22, 35, 45, 30,  8, 16, 5, 48, 100, 10, 15,  3, 12, 1, 1, 22, 32}},
+      {"AcidFM",  {850, 120, 55, 48, 18, 36, 12, 24, 8, 62, 100, 30,  5,  8,  5, 0, 0,  8, 12}},
+      {"WashPad", {340, 780,  6,  8, 12, 20,  0,  5, 2, 38, 100, 15, 20, 10, 20, 1, 2, 40, 70}},
+      {"Pluck",   {500, 150, 28, 42, 28, 15,  4, 12, 7, 52, 100, 10,  8,  5, 10, 2, 1, 10, 24}},
+      {"Drone",   {430, 900,  3,  5, 35, 44, 18, 20, 4, 25, 100, 25, 25, 15, 30, 2, 2, 55, 65}},
+      {"Chaos",   {980, 650, 65, 61, 72, 62, 25, 34, 3, 70, 100, 50, 40, 20, 25, 0, 1, 18, 22}},
     };
     return k_presets;
   }
@@ -556,13 +646,182 @@ class Synth {
   static constexpr float k_sample_rate_recip = 1.f / k_sample_rate_hz;
   static constexpr float k_two_pi            = 6.2831853071795864769f;
   static constexpr float k_fm_depth_scale    = 2.f;
-  static constexpr float k_amp_attack        = 0.08f;   // one-pole attack coefficient
-  static constexpr float k_amp_release       = 0.0025f; // one-pole release coefficient
+  static constexpr float k_env_floor         = 1e-5f;
+  static constexpr float k_env_sustain       = 0.68f;
 
   // ---- Utility helpers -----------------------------------------------------
 
   static inline float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  static inline float lerp(float a, float b, float t) {
+    return a + (b - a) * t;
+  }
+
+  static inline uint32_t secondsToSamples(float sec) {
+    const float clampedSec = sec < (1.f / k_sample_rate_hz) ? (1.f / k_sample_rate_hz) : sec;
+    return static_cast<uint32_t>(clampedSec * k_sample_rate_hz);
+  }
+
+  // Maps 0..1 knob input into time in seconds using exponential scaling.
+  // Exponential mapping keeps the short-time area usable and musical.
+  static inline float mapEnvTimeSeconds(uint8_t speed, float norm, bool isAttack) {
+    float minSec = 0.001f;
+    float maxSec = 0.1f;
+
+    if (isAttack) {
+      if (speed == k_env_speed_fast) {
+        // Extra-snappy range for transient-heavy sounds.
+        minSec = 0.0003f;
+        maxSec = 0.10f;
+      } else if (speed == k_env_speed_med) {
+        minSec = 0.003f;
+        maxSec = 0.60f;
+      } else {
+        minSec = 0.02f;
+        maxSec = 4.5f;
+      }
+    } else {
+      if (speed == k_env_speed_fast) {
+        minSec = 0.0015f;
+        maxSec = 0.50f;
+      } else if (speed == k_env_speed_med) {
+        minSec = 0.015f;
+        maxSec = 2.0f;
+      } else {
+        minSec = 0.08f;
+        maxSec = 8.0f;
+      }
+    }
+
+    const float t = clampf(norm, 0.f, 1.f);
+    return minSec * std::pow(maxSec / minSec, t);
+  }
+
+  inline void updateEnvelopeTimes() {
+    // Recompute absolute times whenever ENV RANGE / ATTACK / RELEASE changes.
+    params_.envAttackSec = mapEnvTimeSeconds(params_.envSpeed, params_.envAttackNorm, true);
+    params_.envReleaseSec = mapEnvTimeSeconds(params_.envSpeed, params_.envReleaseNorm, false);
+  }
+
+  static inline void startEnvelopeStage(Voice &v, uint8_t stage, float durationSec) {
+    v.envStage = stage;
+    v.envStageStart = v.ampEnv;
+    v.envStagePos = 0;
+    v.envStageDur = secondsToSamples(durationSec);
+  }
+
+  inline void updateEnvelope(Voice &v, const Params &p) {
+    // OPEN mode bypasses release shaping, so we skip auto-entering release there.
+    if (p.envType != k_env_type_open && !v.gateOn && v.envStage != Voice::k_env_stage_release && v.envStage != Voice::k_env_stage_off)
+      startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+
+    switch (p.envType) {
+      case k_env_type_ar:
+        if (v.envStage == Voice::k_env_stage_attack) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, v.velocityAmp, t);
+          if (++v.envStagePos >= v.envStageDur) {
+            if (v.gateOn) {
+              v.envStage = Voice::k_env_stage_sustain;
+            } else {
+              startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+            }
+          }
+        } else if (v.envStage == Voice::k_env_stage_sustain) {
+          v.ampEnv = v.velocityAmp;
+          if (!v.gateOn)
+            startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+        } else if (v.envStage == Voice::k_env_stage_release) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, 0.f, t);
+          if (++v.envStagePos >= v.envStageDur)
+            v.envStage = Voice::k_env_stage_off;
+        }
+        break;
+
+      case k_env_type_adsr: {
+        const float decaySec = clampf(p.envAttackSec * 0.75f, 0.006f, 1.8f);
+        const float sustainLevel = v.velocityAmp * k_env_sustain;
+
+        if (v.envStage == Voice::k_env_stage_attack) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, v.velocityAmp, t);
+          if (++v.envStagePos >= v.envStageDur)
+            startEnvelopeStage(v, Voice::k_env_stage_decay, decaySec);
+        } else if (v.envStage == Voice::k_env_stage_decay) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, sustainLevel, t);
+          if (++v.envStagePos >= v.envStageDur)
+            v.envStage = Voice::k_env_stage_sustain;
+        } else if (v.envStage == Voice::k_env_stage_sustain) {
+          v.ampEnv = sustainLevel;
+          if (!v.gateOn)
+            startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+        } else if (v.envStage == Voice::k_env_stage_release) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, 0.f, t);
+          if (++v.envStagePos >= v.envStageDur)
+            v.envStage = Voice::k_env_stage_off;
+        }
+      } break;
+
+      case k_env_type_ahr: {
+        const float holdSec = clampf(p.envAttackSec * 0.5f, 0.004f, 1.2f);
+
+        if (v.envStage == Voice::k_env_stage_attack) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, v.velocityAmp, t);
+          if (++v.envStagePos >= v.envStageDur)
+            startEnvelopeStage(v, Voice::k_env_stage_hold, holdSec);
+        } else if (v.envStage == Voice::k_env_stage_hold) {
+          v.ampEnv = v.velocityAmp;
+          if (++v.envStagePos >= v.envStageDur || !v.gateOn)
+            startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+        } else if (v.envStage == Voice::k_env_stage_release) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, 0.f, t);
+          if (++v.envStagePos >= v.envStageDur)
+            v.envStage = Voice::k_env_stage_off;
+        }
+      } break;
+
+      case k_env_type_loop_ar:
+        // LOOP AR: while gate is on, keep cycling attack -> release.
+        if (v.envStage == Voice::k_env_stage_attack) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, v.velocityAmp, t);
+          if (++v.envStagePos >= v.envStageDur)
+            startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+        } else if (v.envStage == Voice::k_env_stage_release) {
+          const float t = clampf((v.envStagePos + 1.f) / static_cast<float>(v.envStageDur), 0.f, 1.f);
+          v.ampEnv = lerp(v.envStageStart, 0.f, t);
+          if (++v.envStagePos >= v.envStageDur) {
+            if (v.gateOn) {
+              startEnvelopeStage(v, Voice::k_env_stage_attack, p.envAttackSec);
+            } else {
+              v.envStage = Voice::k_env_stage_off;
+            }
+          }
+        }
+        break;
+
+      case k_env_type_open:
+        // OPEN: gate behaves like a plain on/off amplitude switch.
+        v.ampEnv = v.gateOn ? v.velocityAmp : 0.f;
+        v.envStage = v.gateOn ? Voice::k_env_stage_sustain : Voice::k_env_stage_off;
+        break;
+
+      default:
+        break;
+    }
+
+    if (v.envStage == Voice::k_env_stage_off)
+      v.ampEnv = 0.f;
+    // Free a voice only when gate is off and audio is effectively silent.
+    if (!v.gateOn && v.ampEnv < k_env_floor)
+      v.note = 0xFF;
   }
 
   static inline float midiNoteToW0(float note) {
