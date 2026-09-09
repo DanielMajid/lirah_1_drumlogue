@@ -1,3 +1,9 @@
 .DS_Store
+.bash_history
+.profile
+.sudo_as_admin_successful
 Session_Reports/
+.dep/
 build/
+*.drmlgunit
+BUILD_STEPS.txt

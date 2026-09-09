@@ -1,5 +1,5 @@
 ##############################################################################
-# Project Configuration
+# Configuration for Makefile
 #
 
 PROJECT := lirah_1_drumlogue_poly
@@ -24,10 +24,7 @@ ASMXSRC =
 # Include Paths
 #
 
-COMMON_INC_PATH = /workspace/drumlogue/common
-COMMON_SRC_PATH = /workspace/drumlogue/common
-
-UINCDIR  =
+UINCDIR =
 
 ##############################################################################
 # Library Paths

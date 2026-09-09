@@ -25,7 +25,7 @@
 class Synth {
  public:
   static constexpr uint8_t k_num_voices  = 4;
-  // 10 original params + LFO3 depth + 4 spread params + 4 envelope params
+  // 10 oscillator controls + LFO3 depth + 4 spread controls + 4 envelope controls
   static constexpr uint8_t k_num_params  = 19;
   static constexpr uint8_t k_num_presets = 8;
 
@@ -35,7 +35,7 @@ class Synth {
   // ---- Parameter index enumeration ----------------------------------------
 
   enum ParameterId : uint8_t {
-    // ---- Original 10 parameters (unchanged IDs) ----------------------------
+    // ---- Core oscillator parameters ----------------------------------------
     k_param_fm_depth = 0,       // FM modulation depth (0-1023)
     k_param_hyper_lfo_depth,    // Hyper-LFO gate amplitude (0-1023)
     k_param_lfo1_rate,          // Hyper-LFO 1 rate in tenths of Hz (0-100)
@@ -191,12 +191,16 @@ class Synth {
 
   // ---- Lifecycle -----------------------------------------------------------
 
-  inline int8_t Init(const unit_runtime_desc_t *desc) {
+  Synth(void) {}
+  ~Synth(void) {}
+
+  inline int8_t Init(const unit_runtime_desc_t * desc) {
     if (desc->samplerate != k_sample_rate_hz)
       return k_unit_err_samplerate;
     if (desc->output_channels != 2)
       return k_unit_err_geometry;
 
+    presetIndex_ = 0U;
     Reset();
     return k_unit_err_none;
   }
@@ -206,7 +210,7 @@ class Synth {
   inline void Reset() {
     params_.reset();
 
-    // Clear all raw parameter storage (preserves LFO rate defaults below)
+    // Clear raw parameter storage before assigning defaults below.
     for (uint8_t i = 0; i < k_num_params; ++i)
       rawParams_[i] = 0;
     rawParams_[k_param_lfo1_rate] = 10;
@@ -226,7 +230,6 @@ class Synth {
     pitchBendMul_ = 1.f;
     pressureMod_  = 0.f;
     tempoBpm_     = 120.f;
-    presetIndex_  = 0;
     voiceAge_     = 0;
     lastNote_     = 60; // default to middle C for gate-only triggers
   }
@@ -240,7 +243,7 @@ class Synth {
   //
   // Parameters:
   //   v          — voice state (modified in place)
-  //   baseW0     — per-voice detuned normalized frequency (pre-computed above)
+  //   baseW0     — per-voice detuned normalized frequency computed per block
   //   fmDepth    — per-voice FM depth (global + voice spread offset)
   //   hyperDepth — hyper-LFO gate amplitude (global, post-LFO3)
   //   hyperRate1 — hyper-LFO 1 Hz (global, post-LFO3)
@@ -252,23 +255,19 @@ class Synth {
   //
   // Returns the folded, envelope-scaled output sample for this voice.
 
-  inline float renderVoiceSample(Voice &v, float baseW0,
+  inline float renderVoiceSample(Voice & v, float baseW0,
                                   float fmDepth,  float hyperDepth,
                                   float hyperRate1, float hyperRate2,
                                   float fold,     float modTune,
                                   float oscTune,  float feedback,
-                                  const Params &p) {
+                                  const Params & p) {
     // Advance this voice's hyper-LFOs independently so held chords diverge
-    v.lfo1Phase += hyperRate1 * k_sample_rate_recip;
-    v.lfo1Phase -= static_cast<uint32_t>(v.lfo1Phase);
-    v.lfo2Phase += hyperRate2 * k_sample_rate_recip;
-    v.lfo2Phase -= static_cast<uint32_t>(v.lfo2Phase);
-
-    const float lfo1Out = std::sin(k_two_pi * v.lfo1Phase);
-    const float lfo2Out = std::sin(k_two_pi * v.lfo2Phase);
+    v.lfo1Phase = wrapPhase(v.lfo1Phase + hyperRate1 * k_sample_rate_recip);
+    v.lfo2Phase = wrapPhase(v.lfo2Phase + hyperRate2 * k_sample_rate_recip);
 
     // Hyper gate: both LFOs positive at the same time = 3x frequency boost burst
-    const float hyperGate = (lfo1Out >= 0.f && lfo2Out >= 0.f) ? 3.f : 0.f;
+    const float hyperGate =
+        (v.lfo1Phase < 0.5f && v.lfo2Phase < 0.5f) ? 3.f : 0.f;
     const float hyperMod  = 1.f + hyperGate * hyperDepth;
 
     // Pressure deepens FM (channel pressure / poly AT modulates timbre)
@@ -280,24 +279,20 @@ class Synth {
 
     // FM modulator: produces the modulating sine for the carrier's phase
     const float fmSig = std::sin(k_two_pi * v.modPhase);
-    v.modPhase += w0 * modFreqMul * hyperMod;
-    v.modPhase -= static_cast<uint32_t>(v.modPhase);
+    v.modPhase = wrapPhase(v.modPhase + w0 * modFreqMul * hyperMod);
 
     // FM carrier: pitch is shifted by the modulator signal each sample
     const float carrW0  = w0 * oscFreqMul * hyperMod + fmSig * fmScale * k_sample_rate_recip;
     const float carrier = 0.5f * std::sin(k_two_pi * v.carrierPhase);
-    v.carrierPhase += carrW0;
-    v.carrierPhase -= static_cast<uint32_t>(v.carrierPhase);
+    v.carrierPhase = wrapPhase(v.carrierPhase + carrW0);
 
     // Wavefold with per-voice feedback path
     const float foldDrive   = 1.f + fold;
     const float feedbackMix = 1.f + v.prevSample * feedback;
     const float mainOsc     = carrier * foldDrive * feedbackMix;
 
-    // Triangle-wave folder: reflects the signal at ±0.5, keeping output bounded
-    const float folded = (mainOsc < -0.5f) ? (-1.f - mainOsc)
-                       : (mainOsc >  0.5f) ? ( 1.f - mainOsc)
-                                           :          mainOsc;
+    // Repeated triangle folding keeps extreme fold/feedback settings bounded.
+    const float folded = triangleFold(mainOsc);
 
     v.prevSample = clampf(mainOsc, -1.f, 1.f);
 
@@ -306,17 +301,41 @@ class Synth {
     return folded * v.ampEnv;
   }
 
-  inline void Render(float *out, size_t frames) {
+  inline void Render(float * out, size_t frames) {
     // Snapshot params once per block to avoid mid-block parameter tearing
     const Params p      = params_;
     const float lfo3W0  = p.lfo3Rate * k_sample_rate_recip;
 
-    float *out_p = out;
+    // Note callbacks cannot occur during this render call, so active-voice
+    // layout and tune-spread ratios only need to be calculated once per block.
+    uint8_t activeVoices[k_num_voices];
+    float spreadPositions[k_num_voices];
+    float tuneMultipliers[k_num_voices];
+    uint8_t activeCount = 0U;
+    for (uint8_t vi = 0U; vi < k_num_voices; ++vi) {
+      if (voices_[vi].envStage == Voice::k_env_stage_off)
+        continue;
+
+      activeVoices[activeCount++] = vi;
+    }
+
+    for (uint8_t slot = 0U; slot < activeCount; ++slot) {
+      const float spreadPosition =
+          static_cast<float>(slot) -
+          0.5f * (static_cast<float>(activeCount) - 1.f);
+      spreadPositions[slot] = spreadPosition;
+      tuneMultipliers[slot] =
+          std::pow(2.f, p.tuneSpread * spreadPosition * (1.f / 12.f));
+    }
+
+    float * out_p = out;
     for (size_t i = 0; i < frames; ++i, out_p += 2) {
       // Advance the global LFO3 once per sample (shared scene modulator)
-      lfo3Phase_ += lfo3W0;
-      lfo3Phase_ -= static_cast<uint32_t>(lfo3Phase_);
-      const float lfo3 = std::sin(k_two_pi * lfo3Phase_) * p.lfo3Depth;
+      lfo3Phase_ = wrapPhase(lfo3Phase_ + lfo3W0);
+      const float lfo3 =
+          (p.lfo3Target != k_lfo3_target_off && p.lfo3Depth > 0.f)
+              ? std::sin(k_two_pi * lfo3Phase_) * p.lfo3Depth
+              : 0.f;
 
       // Start from global param values and apply LFO3 modulation.
       // Each voice will then add its own spread offset on top of these.
@@ -334,35 +353,25 @@ class Synth {
                           sceneHyperRate1, sceneHyperRate2,
                           sceneFold, sceneModTune, sceneOscTune, sceneFeedback);
 
-      // Build a list of active voices first.
-      // We spread based on this active list (not fixed slot index), so 1/2/3
-      // note chords stay centered and do not lean to one side.
-      uint8_t activeVoices[k_num_voices];
-      uint8_t activeCount = 0;
-      for (uint8_t vi = 0; vi < k_num_voices; ++vi) {
-        const Voice &v = voices_[vi];
-        if (v.note == 0xFF && v.ampEnv < 1e-5f)
-          continue;
-        activeVoices[activeCount++] = vi;
-      }
-
       // Accumulate all voice outputs into a mono mix
       float mix = 0.f;
-      for (uint8_t slot = 0; slot < activeCount; ++slot) {
+      for (uint8_t slot = 0U; slot < activeCount; ++slot) {
         const uint8_t vi = activeVoices[slot];
-        Voice &v = voices_[vi];
+        Voice & v = voices_[vi];
+
+        if (v.envStage == Voice::k_env_stage_off)
+          continue;
 
         // Active voices are always laid out around 0:
         // N=1: {0}, N=2: {-0.5,+0.5}, N=3: {-1,0,+1}, N=4: {-1.5,-0.5,+0.5,+1.5}
-        const float spreadPos = static_cast<float>(slot) - 0.5f * (static_cast<float>(activeCount) - 1.f);
+        const float spreadPos = spreadPositions[slot];
 
         const float fmDepth  = clampf(sceneFmDepth   + p.fmSpread       * spreadPos, 0.f, 2046.f);
         const float fold     = clampf(sceneFold       + p.foldSpread     * spreadPos, 0.f, 10.f);
         const float feedback = clampf(sceneFeedback   + p.feedbackSpread * spreadPos, 0.f, 2.f);
 
         // Apply centered tune spread for this active-voice slot.
-        const float semitones = p.tuneSpread * spreadPos;
-        const float voiceBaseW0 = v.baseW0 * std::pow(2.f, semitones * (1.f / 12.f));
+        const float voiceBaseW0 = v.baseW0 * tuneMultipliers[slot];
 
         mix += renderVoiceSample(v, voiceBaseW0, fmDepth, sceneHyperDepth,
                                  sceneHyperRate1, sceneHyperRate2,
@@ -472,11 +481,11 @@ class Synth {
     return rawParams_[index];
   }
 
-  inline const char *getParameterStrValue(uint8_t index, int32_t value) const {
-    static const char *targetNames[] = {"OFF",   "FMDEP", "HDEP", "HR1", "HR2",
+  inline const char * getParameterStrValue(uint8_t index, int32_t value) const {
+    static const char * targetNames[] = {"OFF",   "FMDEP", "HDEP", "HR1", "HR2",
                                         "FOLD",  "FMTUN", "OTUN", "FDBK"};
-    static const char *envTypeNames[] = {"AR", "ADSR", "AHR", "LOOP", "OPEN"};
-    static const char *envSpeedNames[] = {"FAST", "MED", "SLOW"};
+    static const char * envTypeNames[] = {"AR", "ADSR", "AHR", "LOOP", "OPEN"};
+    static const char * envSpeedNames[] = {"FAST", "MED", "SLOW"};
 
     if (index == k_param_lfo3_target) {
       if (value < k_lfo3_target_off)       value = k_lfo3_target_off;
@@ -499,7 +508,7 @@ class Synth {
     return nullptr;
   }
 
-  inline const uint8_t *getParameterBmpValue(uint8_t, int32_t) const { return nullptr; }
+  inline const uint8_t * getParameterBmpValue(uint8_t, int32_t) const { return nullptr; }
 
   // ---- Voice allocation ----------------------------------------------------
 
@@ -514,7 +523,7 @@ class Synth {
     uint32_t oldestActAge = 0xFFFFFFFFU;
 
     for (uint8_t i = 0; i < k_num_voices; ++i) {
-      const Voice &v = voices_[i];
+      const Voice & v = voices_[i];
       if (v.note == 0xFF) {
         bestFree = i;
         break; // free slot: no need to search further
@@ -534,9 +543,17 @@ class Synth {
   // ---- MIDI callbacks ------------------------------------------------------
 
   inline void NoteOn(uint8_t note, uint8_t velocity) {
+    if (velocity == 0U) {
+      NoteOff(note);
+      return;
+    }
+
+    if (note > 127U)
+      note = 127U;
+
     lastNote_ = note;
     const uint8_t vi = allocVoice();
-    Voice &v = voices_[vi];
+    Voice & v = voices_[vi];
 
     v.note        = note;
     v.baseW0      = midiNoteToW0(static_cast<float>(note));
@@ -544,7 +561,7 @@ class Synth {
     v.gateOn      = true;
     v.age         = voiceAge_++;
 
-    // Retrigger phases so the new note starts with a clean attack transient
+    // Retrigger phases so the triggered note starts with a clean attack transient.
     v.carrierPhase = 0.f;
     v.modPhase     = 0.f;
     v.lfo1Phase    = 0.f;
@@ -583,10 +600,14 @@ class Synth {
   }
 
   inline void ChannelPressure(uint8_t pressure) {
+    if (pressure > 127U)
+      pressure = 127U;
     pressureMod_ = pressure * (1.f / 127.f);
   }
 
   inline void Aftertouch(uint8_t, uint8_t aftertouch) {
+    if (aftertouch > 127U)
+      aftertouch = 127U;
     pressureMod_ = aftertouch * (1.f / 127.f);
   }
 
@@ -597,7 +618,7 @@ class Synth {
   inline void LoadPreset(uint8_t idx) {
     if (idx >= k_num_presets)
       idx = 0;
-    const Preset &preset = presets()[idx];
+    const Preset & preset = presets()[idx];
     for (uint8_t i = 0; i < k_num_params; ++i)
       setParameter(i, preset.values[i]);
     presetIndex_ = idx;
@@ -605,7 +626,7 @@ class Synth {
 
   inline uint8_t getPresetIndex() const { return presetIndex_; }
 
-  static inline const char *getPresetName(uint8_t idx) {
+  static inline const char * getPresetName(uint8_t idx) {
     if (idx >= k_num_presets)
       return nullptr;
     return presets()[idx].name;
@@ -616,7 +637,7 @@ class Synth {
   // ---- Preset table --------------------------------------------------------
 
   struct Preset {
-    const char *name;
+    const char * name;
     // 19 values: [fmDep, hLfo, lfo1, lfo2, fold, fmTune, pitch, fdbk,
     //             lfo3Tgt, lfo3Rate, lfo3Depth,
     //             fmSprd, foldSprd, fdbkSprd, tuneSprd,
@@ -624,9 +645,9 @@ class Synth {
     int32_t values[k_num_params];
   };
 
-  static inline const Preset *presets() {
+  static inline const Preset * presets() {
     static const Preset k_presets[k_num_presets] = {
-      // Spread params all zero in Init — behaves identically to monophonic original
+      // Init uses zero voice spread for a centered unison state.
       {"Init",    {  0,   0, 10, 20,  0,  0,  0,  0, 0, 10,  0,  0,  0,  0,  0, 0, 1, 20, 35}},
       // Presets with spread values chosen to accent each preset's character:
       {"HyperFM", {700, 480, 40, 32, 22, 18,  0,  8, 1, 55, 100, 20,  5,  5,  8, 0, 0, 15, 18}},
@@ -646,13 +667,27 @@ class Synth {
   static constexpr float k_sample_rate_recip = 1.f / k_sample_rate_hz;
   static constexpr float k_two_pi            = 6.2831853071795864769f;
   static constexpr float k_fm_depth_scale    = 2.f;
-  static constexpr float k_env_floor         = 1e-5f;
   static constexpr float k_env_sustain       = 0.68f;
 
   // ---- Utility helpers -----------------------------------------------------
 
   static inline float clampf(float v, float lo, float hi) {
     return v < lo ? lo : (v > hi ? hi : v);
+  }
+
+  static inline float wrapPhase(float phase) {
+    phase -= static_cast<int32_t>(phase);
+    return phase < 0.f ? phase + 1.f : phase;
+  }
+
+  static inline float triangleFold(float sample) {
+    const float cycles = (sample + 0.5f) * 0.5f;
+    int32_t cycle = static_cast<int32_t>(cycles);
+    if (static_cast<float>(cycle) > cycles)
+      --cycle;
+
+    const float wrapped = sample - 2.f * static_cast<float>(cycle);
+    return wrapped > 0.5f ? 1.f - wrapped : wrapped;
   }
 
   static inline float lerp(float a, float b, float t) {
@@ -705,17 +740,40 @@ class Synth {
     params_.envReleaseSec = mapEnvTimeSeconds(params_.envSpeed, params_.envReleaseNorm, false);
   }
 
-  static inline void startEnvelopeStage(Voice &v, uint8_t stage, float durationSec) {
+  static inline void startEnvelopeStage(Voice & v, uint8_t stage, float durationSec) {
     v.envStage = stage;
     v.envStageStart = v.ampEnv;
     v.envStagePos = 0;
     v.envStageDur = secondsToSamples(durationSec);
   }
 
-  inline void updateEnvelope(Voice &v, const Params &p) {
-    // OPEN mode bypasses release shaping, so we skip auto-entering release there.
+  inline void updateEnvelope(Voice & v, const Params & p) {
+    // OPEN mode bypasses release shaping and does not auto-enter release.
     if (p.envType != k_env_type_open && !v.gateOn && v.envStage != Voice::k_env_stage_release && v.envStage != Voice::k_env_stage_off)
       startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+
+    // Move stages that do not exist in the selected envelope mode to a
+    // valid stage. This keeps live mode changes and preset changes responsive.
+    if (v.gateOn) {
+      if (p.envType == k_env_type_ar &&
+          (v.envStage == Voice::k_env_stage_decay ||
+           v.envStage == Voice::k_env_stage_hold)) {
+        v.envStage = Voice::k_env_stage_sustain;
+      } else if (p.envType == k_env_type_adsr &&
+                 v.envStage == Voice::k_env_stage_hold) {
+        v.envStage = Voice::k_env_stage_sustain;
+      } else if (p.envType == k_env_type_ahr &&
+                 (v.envStage == Voice::k_env_stage_decay ||
+                  v.envStage == Voice::k_env_stage_sustain)) {
+        const float holdSec = clampf(p.envAttackSec * 0.5f, 0.004f, 1.2f);
+        startEnvelopeStage(v, Voice::k_env_stage_hold, holdSec);
+      } else if (p.envType == k_env_type_loop_ar &&
+                 (v.envStage == Voice::k_env_stage_decay ||
+                  v.envStage == Voice::k_env_stage_hold ||
+                  v.envStage == Voice::k_env_stage_sustain)) {
+        startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
+      }
+    }
 
     switch (p.envType) {
       case k_env_type_ar:
@@ -817,11 +875,11 @@ class Synth {
         break;
     }
 
-    if (v.envStage == Voice::k_env_stage_off)
+    if (v.envStage == Voice::k_env_stage_off) {
       v.ampEnv = 0.f;
-    // Free a voice only when gate is off and audio is effectively silent.
-    if (!v.gateOn && v.ampEnv < k_env_floor)
       v.note = 0xFF;
+      v.gateOn = false;
+    }
   }
 
   static inline float midiNoteToW0(float note) {
@@ -831,16 +889,18 @@ class Synth {
 
   static inline float velocityToAmp(uint8_t velocity) {
     // Map velocity 0-127 to amplitude 0.15-1.0 (minimum touch still audible)
+    if (velocity > 127U)
+      velocity = 127U;
     return 0.15f + 0.85f * (velocity * (1.f / 127.f));
   }
 
   // Apply LFO3 scene-level modulation to the shared parameter set.
   // Results are passed to each voice per sample as the "scene" baseline.
   static inline void applyLfo3Modulation(uint8_t target, float mod,
-                                          float &fmDepth,    float &hyperDepth,
-                                          float &hyperRate1, float &hyperRate2,
-                                          float &fold,       float &modTune,
-                                          float &oscTune,    float &feedback) {
+                                          float & fmDepth,    float & hyperDepth,
+                                          float & hyperRate1, float & hyperRate2,
+                                          float & fold,       float & modTune,
+                                          float & oscTune,    float & feedback) {
     switch (target) {
       case k_lfo3_target_fm_depth:
         fmDepth    = clampf(fmDepth    + mod * 350.f, 0.f, 2046.f); break;

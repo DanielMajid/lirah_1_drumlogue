@@ -8,19 +8,19 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "unit.h"   // Note: Include common definitions for all units
-#include "synth.h"  // Note: Include custom synth code
+#include "unit.h"   // Drumlogue synth callback declarations.
+#include "synth.h"  // Lirah voice and envelope engine.
 
 static Synth s_synth_instance;
 static unit_runtime_desc_t s_runtime_desc;
 // Host-facing snapshot of parameter values.
-// The drumlogue host asks us for values through this cache, and we also use it
-// to restore state after resets.
+// The drumlogue host reads values from this cache, which also restores state
+// after resets.
 static int32_t s_cached_values[UNIT_MAX_PARAM_COUNT];
 
 // ---- Callback entry points from drumlogue runtime ----------------------------------------------
 
-__unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
+__unit_callback int8_t unit_init(const unit_runtime_desc_t * desc) {
   if (!desc)
     return k_unit_err_undef;
 
@@ -69,16 +69,16 @@ __unit_callback void unit_suspend() {
   s_synth_instance.Suspend();
 }
 
-__unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
+__unit_callback void unit_render(const float * in, float * out, uint32_t frames) {
   (void)in;
   s_synth_instance.Render(out, frames);
 }
 
 __unit_callback void unit_set_param_value(uint8_t id, int32_t value) {
-  if (id >= UNIT_MAX_PARAM_COUNT)
+  if (id >= unit_header.num_params)
     return;
 
-  const unit_param_t &p = unit_header.params[id];
+  const unit_param_t & p = unit_header.params[id];
   if (value < p.min)
     value = p.min;
   if (value > p.max)
@@ -90,16 +90,16 @@ __unit_callback void unit_set_param_value(uint8_t id, int32_t value) {
 }
 
 __unit_callback int32_t unit_get_param_value(uint8_t id) {
-  if (id >= UNIT_MAX_PARAM_COUNT)
+  if (id >= unit_header.num_params)
     return 0;
   return s_cached_values[id];
 }
 
-__unit_callback const char *unit_get_param_str_value(uint8_t id, int32_t value) {
-  if (id >= UNIT_MAX_PARAM_COUNT)
+__unit_callback const char * unit_get_param_str_value(uint8_t id, int32_t value) {
+  if (id >= unit_header.num_params)
     return nullptr;
 
-  const unit_param_t &p = unit_header.params[id];
+  const unit_param_t & p = unit_header.params[id];
   if (value < p.min)
     value = p.min;
   if (value > p.max)
@@ -108,9 +108,16 @@ __unit_callback const char *unit_get_param_str_value(uint8_t id, int32_t value) 
   return s_synth_instance.getParameterStrValue(id, value);
 }
 
-__unit_callback const uint8_t *unit_get_param_bmp_value(uint8_t id, int32_t value) {
-  (void)id;
-  (void)value;
+__unit_callback const uint8_t * unit_get_param_bmp_value(uint8_t id, int32_t value) {
+  if (id >= unit_header.num_params)
+    return nullptr;
+
+  const unit_param_t & p = unit_header.params[id];
+  if (value < p.min)
+    value = p.min;
+  if (value > p.max)
+    value = p.max;
+
   return s_synth_instance.getParameterBmpValue(id, value);
 }
 
@@ -163,6 +170,6 @@ __unit_callback uint8_t unit_get_preset_index() {
   return s_synth_instance.getPresetIndex();
 }
 
-__unit_callback const char *unit_get_preset_name(uint8_t idx) {
+__unit_callback const char * unit_get_preset_name(uint8_t idx) {
   return Synth::getPresetName(idx);
 }

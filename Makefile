@@ -7,11 +7,14 @@ MKFILE_PATH := $(realpath $(lastword $(MAKEFILE_LIST)))
 # Project root
 PROJECT_ROOT ?= $(dir $(MKFILE_PATH))
 
+# logue SDK
+LOGUE_SDK_PATH ?= $(realpath $(PROJECT_ROOT)/logue-sdk)
+
 # Common includes
-COMMON_INC_PATH ?= $(realpath $(PROJECT_ROOT)/../common/)
+COMMON_INC_PATH ?= $(realpath $(LOGUE_SDK_PATH)/platform/drumlogue/common/)
 
 # Common sources
-COMMON_SRC_PATH ?= $(realpath $(PROJECT_ROOT)/../common/)
+COMMON_SRC_PATH ?= $(realpath $(LOGUE_SDK_PATH)/platform/drumlogue/common/)
 
 # Installation directory
 INSTALLDIR ?= $(PROJECT_ROOT)
@@ -88,7 +91,7 @@ ifneq ($(DEBUG),)
   USE_LTO := no
   UDEFS += -DDEBUG
   ifeq ($(DEBUG_OPTIM),)
-    USE_OPT += -Og ## Debug friendly optimizations
+    USE_OPT += -Og ## Debug friendly optimizatiions
   else
     USE_OPT += $(DEBUG_OPTIM)
   endif

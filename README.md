@@ -4,7 +4,7 @@
 
 ## User Manual
 
-### Sound engine overview
+### Sound Engine Overview
 
 - 4-voice polyphonic FM synth engine.
 - Each voice has independent FM carrier/modulator phases, Hyper-LFO phases, feedback memory, and amp envelope.
@@ -16,7 +16,7 @@
 - Spread is centered for 1/2/3/4 active voices so chords do not lean to one side.
 - Envelope section includes 5 modes: `AR`, `ADSR`, `AHR`, `LOOP`, `OPEN`.
 
-### Polyphony and voice allocation
+### Polyphony and Voice Allocation
 
 - Voice count: 4.
 - Allocation order on `Note On`: free slot -> oldest releasing voice -> oldest active voice (oldest-first steal).
@@ -24,7 +24,7 @@
 - `All Note Off` releases all voices.
 - Output mix is scaled by 0.25 to keep level consistent when chords are held.
 
-### Parameters (19 total)
+### Parameters (19 Total)
 
 1. `FM DEPTH` (`0..1023`): FM modulation amount.
 2. `HYPER LFO` (`0..1023`): Hyper-LFO depth.
@@ -46,7 +46,7 @@
 18. `ATTACK` (`0..100`): Envelope attack time control.
 19. `RELEASE` (`0..100`): Envelope release time control.
 
-### `LFO TARGET` map
+### `LFO TARGET` Map
 
 - `0` = `OFF`
 - `1` = `FMDEP`
@@ -58,7 +58,7 @@
 - `7` = `OTUN`
 - `8` = `FDBK`
 
-### `ENV TYPE` map
+### `ENV TYPE` Map
 
 - `0` = `AR`
 - `1` = `ADSR`
@@ -66,7 +66,7 @@
 - `3` = `LOOP`
 - `4` = `OPEN`
 
-### Envelope speed behavior (`ENV RANGE`)
+### Envelope Speed Behavior (`ENV RANGE`)
 
 The `ATTACK` and `RELEASE` knobs are remapped based on `ENV RANGE`.
 
@@ -74,7 +74,7 @@ The `ATTACK` and `RELEASE` knobs are remapped based on `ENV RANGE`.
 - `MED`: balanced times for general use.
 - `SLOW`: long swell/tail times for ambient and drone textures.
 
-### MIDI and performance behavior
+### MIDI and Performance Behavior
 
 - `Note On`: allocates a voice, sets note pitch, scales amp from velocity, and retriggers voice phases.
 - `Gate On`: retriggers using the last received MIDI note.
@@ -82,26 +82,26 @@ The `ATTACK` and `RELEASE` knobs are remapped based on `ENV RANGE`.
 - `Pitch Bend`: +/-2 semitone range.
 - `Channel Pressure` and `Aftertouch`: increase FM response depth.
 
-## Build Instructions
+## Build
 
-### Prerequisites
-
-- logue-sdk Docker environment
-
-### Build command
-
-From the logue-sdk root:
+Clone the project together with its pinned dependencies:
 
 ```sh
-./docker/run_cmd.sh build drumlogue/lirah_1_drumloguePOLY
+git clone --recurse-submodules https://github.com/DanielMajid/lirah_1_drumlogue.git
+cd lirah_1_drumlogue
 ```
 
-If this repository is outside `logue-sdk/platform/drumlogue/`, copy or symlink it there before building.
+Set up and activate the drumlogue toolchain as described by the logue SDK, then
+run:
 
-Build outputs are generated in `lirah_1_drumloguePOLY/build/`, and install places:
+```sh
+make clean
+make install
+```
 
-- `lirah_1_drumloguePOLY/lirah_1_drumlogue_poly.drmlgunit`
-
-### Load on drumlogue
-
-Use the drumlogue unit loader workflow to import `lirah_1_drumlogue_poly.drmlgunit` into a synth slot.
+The project Makefile contains the complete build method from the official
+drumlogue `dummy-synth` project. It uses the project-local `logue-sdk` submodule
+by default; set
+`LOGUE_SDK_PATH=/path/to/logue-sdk` to select another initialized SDK checkout.
+The install target writes `lirah_1_drumlogue_poly.drmlgunit` to this directory;
+load it into a Drumlogue synth slot with the Korg librarian.

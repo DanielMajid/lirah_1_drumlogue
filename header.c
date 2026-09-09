@@ -5,7 +5,7 @@
  *  Copyright (c) 2026.
  */
 
-#include "unit.h"  // Note: Include common definitions for all units
+#include "unit.h"  // Drumlogue unit header types and constants.
 
 // ---- Unit header definition  --------------------------------------------------------------------
 
@@ -16,12 +16,12 @@ const __unit_header unit_header_t unit_header = {
     .dev_id = 0x4D616A69U,
     .unit_id = 0x00000005U,
     // Version format: 0x00MMmmpp (major/minor/patch)
-    .version = 0x00010002U,
+    .version = 0x00000100U,
     .name = "Lirah-1Ply",
     .num_presets = 8,
     .num_params = 19,
     .params = {
-        // ---- Original 10 parameters ----------------------------------------
+        // ---- Core oscillator parameters ------------------------------------
         {0, 1023, 0,  0, k_unit_param_type_none,    0, 0, 0, {"FM DEPTH"}},
         {0, 1023, 0,  0, k_unit_param_type_none,    0, 0, 0, {"HYPER LFO"}},
         {0,  100, 0, 10, k_unit_param_type_none,    0, 0, 0, {"LFO1 RATE"}},
