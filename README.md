@@ -1,30 +1,24 @@
-# Lirah-1 Drumlogue Synth Unit
+# Lirah-4 Drumlogue Synth Unit
 
-`lirah_1_drumloguePOLY` is the polyphonic drumlogue synth-unit adaptation of the Lirah-1 voice (`Lirah-1Ply` in the unit header).
+`lirah_1_drumlogue` is a four-voice Drumlogue synth unit inspired by the Soma Laboratory Lyra-4 organismic synthesizer. Its sound engine combines two-operator FM, dual Hyper LFO lanes, wavefolding, and feedback.
 
-## User Manual
+# Highlights
 
-### Sound Engine Overview
-
-- 4-voice polyphonic FM synth engine.
+- Four-voice FM synth engine.
 - Each voice has independent FM carrier/modulator phases, Hyper-LFO phases, feedback memory, and amp envelope.
+- With 4 voices actively playing, the next `Note On` played will 'steal' the slot of the oldest active voice.
 - Hyper-LFO behavior comes from two sine LFO lanes that are AND-gated (both positive = boosted frequency burst).
 - Wave folding and feedback are applied in the carrier path.
 - Global assignable modulation lane (`LFO TARGET` + `LFO RATE` + `LFO DEPTH`, called LFO3 internally).
-- Velocity-sensitive amplitude and pressure/aftertouch FM response.
+- Velocity-sensitive amplitude, global channel-pressure FM response, and note-specific aftertouch FM response.
 - Voice spread controls offset selected parameters across active voices.
 - Spread is centered for 1/2/3/4 active voices so chords do not lean to one side.
 - Envelope section includes 5 modes: `AR`, `ADSR`, `AHR`, `LOOP`, `OPEN`.
+- `Pitch Bend`: +/-2 semitone range.
+- `Channel Pressure`: increases FM response across all active voices.
+- `Aftertouch`: increases FM response only for voices playing the matching note.
 
-### Polyphony and Voice Allocation
-
-- Voice count: 4.
-- Allocation order on `Note On`: free slot -> oldest releasing voice -> oldest active voice (oldest-first steal).
-- `Note Off` releases all matching active voices for that note.
-- `All Note Off` releases all voices.
-- Output mix is scaled by 0.25 to keep level consistent when chords are held.
-
-### Parameters (19 Total)
+# User Parameters
 
 1. `FM DEPTH` (`0..1023`): FM modulation amount.
 2. `HYPER LFO` (`0..1023`): Hyper-LFO depth.
@@ -46,19 +40,19 @@
 18. `ATTACK` (`0..100`): Envelope attack time control.
 19. `RELEASE` (`0..100`): Envelope release time control.
 
-### `LFO TARGET` Map
+# `LFO TARGET` Map
 
 - `0` = `OFF`
-- `1` = `FMDEP`
-- `2` = `HDEP`
-- `3` = `HR1`
-- `4` = `HR2`
-- `5` = `FOLD`
-- `6` = `FMTUN`
-- `7` = `OTUN`
-- `8` = `FDBK`
+- `1` = `FMDEP` (FM Depth)
+- `2` = `HDEP` (Hyper LFO Depth)
+- `3` = `HR1` (Hyper LFO1 Rate)
+- `4` = `HR2` (Hyper LFO2 Rate)
+- `5` = `FOLD` (Wavefold Amount)
+- `6` = `FMTUN` (Modulator Tuning)
+- `7` = `OTUN` (Carrier Tuning)
+- `8` = `FDBK` (Feedback Amount)
 
-### `ENV TYPE` Map
+# `ENV TYPE` Map
 
 - `0` = `AR`
 - `1` = `ADSR`
@@ -66,7 +60,18 @@
 - `3` = `LOOP`
 - `4` = `OPEN`
 
-### Envelope Speed Behavior (`ENV RANGE`)
+# `OPEN` Envelope Behavior
+
+`OPEN` bypasses the normal note-controlled amplitude envelope and holds the VCA fully open.
+
+- Selecting `OPEN` immediately opens one voice at the most recently received pitch. It uses middle C if no note has been received since startup.
+- The first `Note On` replaces this temporary voice, so middle C is not layered beneath the played note.
+- Further `Note On` messages allocate voices normally, up to the four-voice limit.
+- Voices in `OPEN` use full amplitude and ignore `Note Off` and `Gate Off` messages.
+- Changing from `OPEN` to another envelope mode releases the open voices using the current release setting.
+- `All Note Off` immediately silences every voice and remains available as a panic command.
+
+# Envelope Speed Behavior (`ENV RANGE`)
 
 The `ATTACK` and `RELEASE` knobs are remapped based on `ENV RANGE`.
 
@@ -74,34 +79,29 @@ The `ATTACK` and `RELEASE` knobs are remapped based on `ENV RANGE`.
 - `MED`: balanced times for general use.
 - `SLOW`: long swell/tail times for ambient and drone textures.
 
-### MIDI and Performance Behavior
+# Dependencies
 
-- `Note On`: allocates a voice, sets note pitch, scales amp from velocity, and retriggers voice phases.
-- `Gate On`: retriggers using the last received MIDI note.
-- `Note Off` / `Gate Off`: releases the note envelope.
-- `Pitch Bend`: +/-2 semitone range.
-- `Channel Pressure` and `Aftertouch`: increase FM response depth.
+The project requires the logue SDK sources. It
+uses `./logue-sdk` by default.
 
-## Build
+# Build
 
-Clone the project together with its pinned dependencies:
+From the project folder, initialize the dependencies:
 
 ```sh
-git clone --recurse-submodules https://github.com/DanielMajid/lirah_1_drumlogue.git
-cd lirah_1_drumlogue
+git submodule update --init --recursive
 ```
 
-Set up and activate the drumlogue toolchain as described by the logue SDK, then
-run:
+Make sure Docker is running, then download the build image if needed:
 
 ```sh
-make clean
-make install
+docker pull xiashj/logue-sdk:latest
 ```
 
-The project Makefile contains the complete build method from the official
-drumlogue `dummy-synth` project. It uses the project-local `logue-sdk` submodule
-by default; set
-`LOGUE_SDK_PATH=/path/to/logue-sdk` to select another initialized SDK checkout.
-The install target writes `lirah_1_drumlogue_poly.drmlgunit` to this directory;
-load it into a Drumlogue synth slot with the Korg librarian.
+Compile and package the unit:
+
+```sh
+./logue-sdk/docker/run_cmd.sh --platform=. build -f --drumlogue .
+```
+
+See Korg’s [logue SDK Docker build instructions](https://github.com/korginc/logue-sdk/blob/main/docker/README.md) for the complete build-environment documentation.

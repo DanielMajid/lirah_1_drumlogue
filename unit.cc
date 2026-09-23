@@ -1,6 +1,6 @@
 /**
  *  @file unit.cc
- *  @brief drumlogue SDK unit interface for Lirah-1 synth
+ *  @brief drumlogue SDK unit interface for Lirah-4 synth
  *
  *  Copyright (c) 2026.
  */
@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include "unit.h"   // Drumlogue synth callback declarations.
-#include "synth.h"  // Lirah voice and envelope engine.
+#include "synth.h"  // Lirah-4 voice and envelope engine.
 
 static Synth s_synth_instance;
 static unit_runtime_desc_t s_runtime_desc;

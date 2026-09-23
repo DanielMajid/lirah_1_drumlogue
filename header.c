@@ -1,6 +1,6 @@
 /**
  *  @file header.c
- *  @brief drumlogue SDK unit header for Lirah-1 synth
+ *  @brief drumlogue SDK unit header for Lirah-4 synth
  *
  *  Copyright (c) 2026.
  */
@@ -16,8 +16,8 @@ const __unit_header unit_header_t unit_header = {
     .dev_id = 0x4D616A69U,
     .unit_id = 0x00000005U,
     // Version format: 0x00MMmmpp (major/minor/patch)
-    .version = 0x00000100U,
-    .name = "Lirah-1Ply",
+    .version = 0x00000102U,
+    .name = "Lirah-4",
     .num_presets = 8,
     .num_params = 19,
     .params = {

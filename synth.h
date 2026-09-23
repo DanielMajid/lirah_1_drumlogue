@@ -7,7 +7,7 @@
 #include "unit.h"
 
 // ============================================================================
-//  Lirah-1 Poly — 4-voice polyphonic FM+wavefold synthesizer for drumlogue
+//  Lirah-4 — four-voice FM+wavefold synthesizer for drumlogue
 //
 //  Architecture overview:
 //    - 4 independent voices, each running a full FM carrier+modulator pair
@@ -64,7 +64,7 @@ class Synth {
     k_env_type_adsr,     // Attack, Decay, Sustain, Release
     k_env_type_ahr,      // Attack, Hold, Release
     k_env_type_loop_ar,  // Repeats Attack->Release while gate is held
-    k_env_type_open,     // No shape; gate directly controls full amplitude
+    k_env_type_open,     // Envelope bypass; voices remain fully open
   };
 
   enum EnvelopeSpeed : uint8_t {
@@ -161,6 +161,7 @@ class Synth {
     float prevSample;     // Last output sample, used for feedback path
     float baseW0;         // Normalized note frequency: Hz / sampleRate
     float velocityAmp;    // Amplitude scaled from MIDI velocity
+    float aftertouchMod;  // Per-note aftertouch amount (0-1)
     float ampEnv;         // Running amplitude envelope (0-velocityAmp)
     float envStageStart;  // Envelope value at stage entry
     uint32_t envStagePos; // Number of samples elapsed in current stage
@@ -178,6 +179,7 @@ class Synth {
       prevSample   = 0.f;
       baseW0       = 0.f;
       velocityAmp  = 0.f;
+      aftertouchMod = 0.f;
       ampEnv       = 0.f;
       envStageStart = 0.f;
       envStagePos   = 0;
@@ -228,10 +230,11 @@ class Synth {
 
     lfo3Phase_    = 0.f;
     pitchBendMul_ = 1.f;
-    pressureMod_  = 0.f;
+    channelPressureMod_ = 0.f;
     tempoBpm_     = 120.f;
     voiceAge_     = 0;
     lastNote_     = 60; // default to middle C for gate-only triggers
+    openSeedVoice_ = false;
   }
 
   inline void Resume()  {}
@@ -270,8 +273,12 @@ class Synth {
         (v.lfo1Phase < 0.5f && v.lfo2Phase < 0.5f) ? 3.f : 0.f;
     const float hyperMod  = 1.f + hyperGate * hyperDepth;
 
-    // Pressure deepens FM (channel pressure / poly AT modulates timbre)
-    const float fmScale = fmDepth * (0.5f + 0.5f * pressureMod_);
+    // Channel pressure affects every voice. Per-note aftertouch affects only
+    // its matching voice; whichever source is stronger sets the FM response.
+    const float pressure = channelPressureMod_ > v.aftertouchMod
+                               ? channelPressureMod_
+                               : v.aftertouchMod;
+    const float fmScale = fmDepth * (0.5f + 0.5f * pressure);
 
     const float modFreqMul = 1.f + modTune * 0.01f;
     const float oscFreqMul = 1.f + oscTune * 0.01f;
@@ -453,7 +460,14 @@ class Synth {
       case k_param_env_type:
         if (value < k_env_type_ar)     value = k_env_type_ar;
         if (value > k_env_type_open)   value = k_env_type_open;
-        params_.envType = static_cast<uint8_t>(value);
+        {
+          const uint8_t previousType = params_.envType;
+          params_.envType = static_cast<uint8_t>(value);
+          if (params_.envType == k_env_type_open && previousType != k_env_type_open)
+            enterOpenMode();
+          else if (previousType == k_env_type_open && params_.envType != k_env_type_open)
+            leaveOpenMode();
+        }
         break;
       case k_param_env_speed:
         if (value < k_env_speed_fast)  value = k_env_speed_fast;
@@ -552,12 +566,18 @@ class Synth {
       note = 127U;
 
     lastNote_ = note;
-    const uint8_t vi = allocVoice();
+    // Replace the automatic OPEN-mode seed instead of layering the first
+    // played note over its temporary middle-C pitch.
+    const uint8_t vi = (params_.envType == k_env_type_open && openSeedVoice_)
+                           ? 0U
+                           : allocVoice();
+    openSeedVoice_ = false;
     Voice & v = voices_[vi];
 
     v.note        = note;
     v.baseW0      = midiNoteToW0(static_cast<float>(note));
-    v.velocityAmp = velocityToAmp(velocity);
+    v.velocityAmp = params_.envType == k_env_type_open ? 1.f : velocityToAmp(velocity);
+    v.aftertouchMod = 0.f;
     v.gateOn      = true;
     v.age         = voiceAge_++;
 
@@ -567,10 +587,22 @@ class Synth {
     v.lfo1Phase    = 0.f;
     v.lfo2Phase    = 0.f;
     v.prevSample   = 0.f;
-    startEnvelopeStage(v, Voice::k_env_stage_attack, params_.envAttackSec);
+    if (params_.envType == k_env_type_open) {
+      v.ampEnv = 1.f;
+      v.envStageStart = 1.f;
+      v.envStagePos = 0U;
+      v.envStageDur = 0U;
+      v.envStage = Voice::k_env_stage_sustain;
+    } else {
+      startEnvelopeStage(v, Voice::k_env_stage_attack, params_.envAttackSec);
+    }
   }
 
   inline void NoteOff(uint8_t note) {
+    // OPEN is a VCA bypass. Notes set pitch, but note-off does not close it.
+    if (params_.envType == k_env_type_open)
+      return;
+
     // Release every voice currently holding this note (handles retrigger edge case)
     for (uint8_t i = 0; i < k_num_voices; ++i) {
       if (voices_[i].note == note && voices_[i].gateOn)
@@ -588,6 +620,14 @@ class Synth {
   }
 
   inline void AllNoteOff() {
+    if (params_.envType == k_env_type_open) {
+      // Preserve an explicit host panic as the way to silence an open drone.
+      for (uint8_t i = 0; i < k_num_voices; ++i)
+        voices_[i].reset();
+      openSeedVoice_ = false;
+      return;
+    }
+
     for (uint8_t i = 0; i < k_num_voices; ++i)
       voices_[i].gateOn = false;
   }
@@ -602,13 +642,19 @@ class Synth {
   inline void ChannelPressure(uint8_t pressure) {
     if (pressure > 127U)
       pressure = 127U;
-    pressureMod_ = pressure * (1.f / 127.f);
+    channelPressureMod_ = pressure * (1.f / 127.f);
   }
 
-  inline void Aftertouch(uint8_t, uint8_t aftertouch) {
+  inline void Aftertouch(uint8_t note, uint8_t aftertouch) {
     if (aftertouch > 127U)
       aftertouch = 127U;
-    pressureMod_ = aftertouch * (1.f / 127.f);
+
+    const float amount = aftertouch * (1.f / 127.f);
+    for (uint8_t i = 0U; i < k_num_voices; ++i) {
+      Voice & v = voices_[i];
+      if (v.note == note && v.envStage != Voice::k_env_stage_off)
+        v.aftertouchMod = amount;
+    }
   }
 
   inline void SetTempo(float tempoBpm) { tempoBpm_ = tempoBpm; }
@@ -747,8 +793,57 @@ class Synth {
     v.envStageDur = secondsToSamples(durationSec);
   }
 
+  inline void enterOpenMode() {
+    bool hasVoice = false;
+    for (uint8_t i = 0; i < k_num_voices; ++i) {
+      Voice & v = voices_[i];
+      if (v.note == 0xFF)
+        continue;
+
+      hasVoice = true;
+      v.velocityAmp = 1.f;
+      v.ampEnv = 1.f;
+      v.envStageStart = 1.f;
+      v.envStagePos = 0U;
+      v.envStageDur = 0U;
+      v.gateOn = true;
+      v.envStage = Voice::k_env_stage_sustain;
+    }
+
+    if (hasVoice) {
+      openSeedVoice_ = false;
+      return;
+    }
+
+    // OPEN must make sound without waiting for another trigger. Start one
+    // full-level voice at the most recently received pitch (middle C at boot).
+    Voice & v = voices_[0];
+    v.reset();
+    v.note = lastNote_;
+    v.baseW0 = midiNoteToW0(static_cast<float>(lastNote_));
+    v.velocityAmp = 1.f;
+    v.ampEnv = 1.f;
+    v.envStageStart = 1.f;
+    v.gateOn = true;
+    v.envStage = Voice::k_env_stage_sustain;
+    v.age = voiceAge_++;
+    openSeedVoice_ = true;
+  }
+
+  inline void leaveOpenMode() {
+    // Return persistent OPEN voices to the normal envelope lifecycle.
+    openSeedVoice_ = false;
+    for (uint8_t i = 0; i < k_num_voices; ++i) {
+      Voice & v = voices_[i];
+      if (v.note == 0xFF)
+        continue;
+      v.gateOn = false;
+      startEnvelopeStage(v, Voice::k_env_stage_release, params_.envReleaseSec);
+    }
+  }
+
   inline void updateEnvelope(Voice & v, const Params & p) {
-    // OPEN mode bypasses release shaping and does not auto-enter release.
+    // OPEN mode bypasses the normal note-controlled envelope lifecycle.
     if (p.envType != k_env_type_open && !v.gateOn && v.envStage != Voice::k_env_stage_release && v.envStage != Voice::k_env_stage_off)
       startEnvelopeStage(v, Voice::k_env_stage_release, p.envReleaseSec);
 
@@ -866,9 +961,10 @@ class Synth {
         break;
 
       case k_env_type_open:
-        // OPEN: gate behaves like a plain on/off amplitude switch.
-        v.ampEnv = v.gateOn ? v.velocityAmp : 0.f;
-        v.envStage = v.gateOn ? Voice::k_env_stage_sustain : Voice::k_env_stage_off;
+        v.velocityAmp = 1.f;
+        v.ampEnv = 1.f;
+        v.gateOn = true;
+        v.envStage = Voice::k_env_stage_sustain;
         break;
 
       default:
@@ -929,11 +1025,12 @@ class Synth {
 
   float   lfo3Phase_;    // Global LFO3 phase accumulator (0-1)
   float   pitchBendMul_; // Frequency multiplier from MIDI pitch bend
-  float   pressureMod_;  // Channel pressure / aftertouch modulation depth (0-1)
+  float   channelPressureMod_; // Global channel-pressure modulation depth (0-1)
   float   tempoBpm_;     // Host tempo (available for tempo-sync features)
   uint8_t presetIndex_;  // Currently loaded preset index
   uint8_t lastNote_;     // Most recent MIDI note number (for GateOn)
   uint32_t voiceAge_;    // Monotonic counter incremented on every NoteOn
+  bool openSeedVoice_;   // True until the first note replaces OPEN's startup voice
 
   int32_t rawParams_[k_num_params]; // Raw integer values as seen by the host
 };

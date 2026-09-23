@@ -2,7 +2,7 @@
 # Configuration for Makefile
 #
 
-PROJECT := lirah_1_drumlogue_poly
+PROJECT := lirah_1_drumlogue
 PROJECT_TYPE := synth
 
 ##############################################################################
