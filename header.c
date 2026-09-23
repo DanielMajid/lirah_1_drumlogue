@@ -14,7 +14,7 @@ const __unit_header unit_header_t unit_header = {
     .target = UNIT_TARGET_PLATFORM | k_unit_module_synth,
     .api = UNIT_API_VERSION,
     .dev_id = 0x4D616A69U,
-    .unit_id = 0x00000005U,
+    .unit_id = 0x00001000U,
     // Version format: 0x00MMmmpp (major/minor/patch)
     .version = 0x00000102U,
     .name = "Lirah-4",
